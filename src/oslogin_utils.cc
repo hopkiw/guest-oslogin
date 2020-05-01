@@ -883,7 +883,7 @@ bool GetUsersForGroup(string groupname, std::vector<string>* users, int* errnop)
     url.str("");
     url << kMetadataServerUrl << "users?groupname=" << groupname;
     if (pageToken != "")
-      url << "?pageToken=" << pageToken;
+      url << "&pageToken=" << pageToken;
 
     response.clear();
     http_code = 0;
