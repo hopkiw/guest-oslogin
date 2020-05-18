@@ -1,5 +1,6 @@
 #include <nss.h>
 #include <pwd.h>
+#include <grp.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -18,6 +19,41 @@
 // up to a maximum size, either the size of the user provided struct or
 // ONEWORD_SIZE, whichever is smaller.
 #define ONEWORD_SIZE 32768
+
+#define MAX_GR_MEM 100
+
+#define PW_NAME 0
+#define PW_PASSWD 1
+#define PW_UID 2
+#define PW_GID 3
+#define PW_GECOS 4
+#define PW_DIR 5
+#define PW_SHELL 6
+#define PW_END 7
+
+#define GR_NAME 0
+#define GR_PASSWD 1
+#define GR_GID 2
+#define GR_MEM 3
+#define GR_END 4
+
+#define LEN(index) ((fields[index+1] - fields[index]) - 1)
+
+#define COPYINT(index, result) \
+    do { \
+      memset(buffer,0,buflen); \
+      memcpy(buffer,&str[fields[index]],LEN(index)); \
+      buffer[LEN(index)+1] = '\0'; \
+      result = atoi(buffer); \
+    } while(0)
+
+#define COPYSTR(index, result) \
+    do { \
+      result = buffer; \
+      memcpy(buffer, &str[fields[index]], LEN(index)); \
+      buffer[LEN(index)+1] = '\0'; \
+      buffer += LEN(index)+1; \
+    } while(0)
 
 // Locking implementation: use pthreads.
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -41,6 +77,85 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 // but readaline currently doesn't do that resizing, either it needs to or i
 // need to.
 // all the nss functions are going to need to create resizeable buffers
+
+
+int parsepwent(char *str, struct passwd *result, char *buffer, size_t buflen) {
+  int fields[8] = {0};
+
+  fields[PW_END] = strlen(str)+1;
+  if (fields[PW_END] > buflen) {
+    return ERANGE;
+  }
+
+  int i, field;
+  for(field = 1, i = 0; i < fields[PW_END]; i++) {
+    if (str[i] == ':') {
+      fields[field++] = i+1;
+    }
+  }
+
+  COPYINT(PW_UID, result->pw_uid);
+  COPYINT(PW_GID, result->pw_gid);
+
+  memset(buffer, 0, fields[PW_END]);
+  COPYSTR(PW_NAME, result->pw_name);
+  COPYSTR(PW_PASSWD, result->pw_passwd);
+  COPYSTR(PW_GECOS, result->pw_gecos);
+  COPYSTR(PW_DIR, result->pw_dir);
+  COPYSTR(PW_SHELL, result->pw_shell);
+
+  return 0;
+}
+
+int parsegrent(char *str, struct group *result, char *buffer, size_t buflen) {
+  int fields[5] = {0};
+  int members[MAX_GR_MEM] = {0};
+  int i, field, len;
+  char **bufp;
+
+  fields[GR_END] = strlen(str)+1;
+  if (fields[GR_END] > buflen) {
+    return ERANGE;
+  }
+
+  for(field = 1, i = 0; i < fields[GR_END]; i++) {
+    if (str[i] == ':') {
+      fields[field++] = i+1;
+    }
+  }
+
+  members[0] = fields[GR_MEM];
+  for(field = 1, i = fields[GR_MEM]; i < fields[GR_END]; i++) {
+    if (str[i] == ',') {
+      members[field++] = i+1;
+    }
+  }
+  members[field] = fields[GR_END];
+  
+  if ((fields[GR_END] + ((field+1) * sizeof(char *))) > buflen) {
+    return ERANGE;
+  }
+
+  COPYINT(GR_GID, result->gr_gid);
+  memset(buffer, 0, fields[GR_END]);
+  COPYSTR(GR_NAME, result->gr_name);
+  COPYSTR(GR_PASSWD, result->gr_passwd);
+
+  result->gr_mem = bufp = (char **)buffer;
+  buffer += (sizeof(char *) * (field + 1));
+
+  for(i = 0; i < field; i++) {
+    len = ((members[i+1] - members[i]) - 1);
+    memcpy(buffer, &str[members[i]], len);
+    buffer[len+1] = '\0';
+
+    *(bufp++) = buffer;
+    buffer += len+1;
+  }
+  *bufp = NULL;
+
+  return 0;
+}
 
 struct Buffer {
   int socket; // the socket we read from
@@ -102,82 +217,6 @@ int readaline(struct Buffer *buffer, char *oneword, int buflen) {
       return -1;
     }
   }
-}
-
-int parsepwent(char *str, struct passwd *result, char *buffer, size_t buflen) {
-  // a passwd entry is e.g. USER:x:UID:GID:GECOS:HOMEDIR:SHELL
-  // all string values need to go in the user-provided buffer, up to buflen
-  //
-  // so. count bytes til we get to a ':'
-  // do we have that many bytes left in buflen?
-  // ok then strncpy() it in to ->pw_name. don't forget about \0s!
-  //
-  // start over from where we are.
-  // this should be one-byte 'x', verify that?
-  //
-  // start over from where we are.
-  // count bytes til we get to a ':'
-  // convert this to a number using atoi()
-  // assign to ->pw_uid
-  //
-  // start over from where we are.
-  // count bytes til we get to a ':'
-  // convert this to a number using atoi()
-  // assign to ->pw_gid
-  //
-  // start over from where we are.
-  // count bytes til we get to a ':'
-  // do we have that many bytes left in buflen?
-  // ok then strncpy() it in to ->pw_gecos. don't forget about \0s!
-  //
-  // start over from where we are.
-  // count bytes til we get to a ':'
-  // do we have that many bytes left in buflen?
-  // ok then strncpy() it in to ->pw_dir. don't forget about \0s!
-  //
-  // start over from where we are.
-  // count bytes til we get to a ':'
-  // do we have that many bytes left in buflen?
-  // ok then strncpy() it in to ->pw_shell. don't forget about \0s!
-  //
-  // TODO: macro the read-and-count bit
-  // we can use up the buffer proactively, that's fine
-  char *ptr = str;
-  int count = 0;
-  for(; *ptr != ':'; ptr++)
-    count++;
-  if (count >= buflen) // no room left in buffer
-    return -1;
-  result->pw_name = strncpy(buffer, str, count);
-  buflen -= (count + 1);
-  buffer += (count + 1);
-  *buffer = '\0';
-  buffer++;
-  str = ptr;
-
-  count=0;
-  for(; *ptr != ':'; ptr++)
-    count++;
-  str = ptr;
-
-  count=0;
-  for(; *ptr != ':'; ptr++)
-    count++;
-  char conv[100];
-  strncpy(conv, str, count);
-  conv[count+1] = '\0';
-  result->pw_uid = atoi(conv);
-  str = ptr;
-
-  count=0;
-  for(; *ptr != ':'; ptr++)
-    count++;
-  strncpy(conv, str, count);
-  conv[count+1] = '\0';
-  result->pw_gid = atoi(conv);
-  str = ptr;
-
-  return 0;
 }
 
 static enum nss_status
