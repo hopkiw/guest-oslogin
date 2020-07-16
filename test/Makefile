@@ -1,10 +1,11 @@
 TOPDIR = $(realpath ..)
 
 ifeq ($(GTEST_DIR),)
-GTEST_DIR = /usr/src/googletest/googletest/
+GTEST_DIR = /usr/src/googletest/googletest
 endif
 
 TEST_RUNNER = ./test_runner --gtest_output=xml
+NEW_TEST_RUNNER = ./new_test_runner --gtest_output=xml
 CPPFLAGS += -I$(TOPDIR)/src/include -I/usr/include/json-c -I$(GTEST_DIR) -isystem $(GTEST_DIR)/include
 CXXFLAGS += -g -Wall -Wextra -std=c++11
 LDLIBS = -lcurl -ljson-c -lpthread
@@ -19,6 +20,12 @@ gtest-all.o : $(GTEST_DIR)/src/gtest-all.cc
 
 test_runner : oslogin_utils_test.o $(TOPDIR)/src/oslogin_utils.o gtest-all.o
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $^ -o $@ $(LDLIBS)
+
+new_test_runner : oslogin_test.o gtest-all.o
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $^ -o $@ $(LDLIBS)
+
+new_tests : new_test_runner
+	$(NEW_TEST_RUNNER) ${GTESTARGS}
 
 non_network_tests : test_runner
 	$(TEST_RUNNER) --gtest_filter=*-FindGroupTest.*:GetUsersForGroupTest.*

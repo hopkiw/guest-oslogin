@@ -1,7 +1,7 @@
 all install :
 	$(MAKE) -C src $@
 
-alltests non_network_tests network_tests :
+alltests non_network_tests network_tests new_tests :
 	$(MAKE) -C test $@
 
 clean :
