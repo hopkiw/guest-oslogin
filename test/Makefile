@@ -24,7 +24,7 @@ test_runner : oslogin_utils_test.o $(TOPDIR)/src/oslogin_utils.o gtest-all.o
 new_test_runner : oslogin_test.o gtest-all.o
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $^ -o $@ $(LDLIBS)
 
-new_tests : new_test_runner
+new_tests : new_test_runner $(TOPDIR)/src/nss/nss_oslogin.c
 	$(NEW_TEST_RUNNER) ${GTESTARGS}
 
 non_network_tests : test_runner

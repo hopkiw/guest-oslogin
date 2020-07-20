@@ -200,7 +200,7 @@ int dial(struct Buffer *buf) {
     strcpy(remote.sun_path, SOCK_PATH);
     len = strlen(remote.sun_path) + sizeof(remote.sun_family);
     if (connect(buf->socket, (struct sockaddr *)&remote, len) == -1) {
-        DEBUGF("failed to connect");
+        DEBUGF("failed to connect\n");
         return -1;
     }
 
@@ -212,7 +212,7 @@ int readaline(struct Buffer *buffer, char *oneword, int buflen) {
   while(1) {
     for (; buffer->rpos < buffer->buflen; buffer->rpos++) {
       if (wpos >= buflen) {
-        DEBUGF("wpos >= buflen\n");
+        DEBUGF("wpos (%d) >= buflen (%d)\n", wpos, buflen);
         // ran out of room. set errno? return special val?
         // TODO: next call needs to still return THIS line
         return -1;
@@ -244,48 +244,109 @@ int readaline(struct Buffer *buffer, char *oneword, int buflen) {
 static enum nss_status
 _nss_oslogin_getpwnam_r(const char *name, struct passwd *result, char *buffer,
                         size_t buflen, int *errnop) {
+  DEBUGF("entered getpwnam_r\n");
   // create a local manager struct
+  // TODO: memset 0 this, or initialize fields
+  int res;
   struct Buffer mgr;
+  mgr.rpos = 0;
+  mgr.buflen = 0;
   mgr.buf = (char *)malloc(BUFSIZE);
 
+  *errnop = 0;
+
   // dial the socket
-  if (!(dial(&mgr))) {
+  if (dial(&mgr) != 0) {
     return NSS_STATUS_NOTFOUND;
   }
 
   // send the verb GETPWNAM with the argument <name>
   // TODO: validate incoming length of 'name' fits in 100 char
-  char str[100];
+  char str[1000];
   sprintf(str, "GETPWNAM %s\n", name);
   if (send(mgr.socket, str, strlen(str), 0) == -1) {
-      DEBUGF("send");
+      DEBUGF("send\n");
       return NSS_STATUS_NOTFOUND;
   }
 
   // read a line using the local struct
   // TODO: stop using 'str' here
-  if ((readaline(&mgr, str, 100)) < 0) {
-    DEBUGF("failed to read result");
+  if ((readaline(&mgr, str, 1000)) < 0) {
+    DEBUGF("failed to read result\n");
+    free(mgr.buf);
     return NSS_STATUS_NOTFOUND;
   }
+  free(mgr.buf);
 
   if (str[0] == '\n') {
-    DEBUGF("no results for name");
+    DEBUGF("no results for name\n");
     return NSS_STATUS_NOTFOUND;
   }
 
   // parse into struct passwd result
-  parsepasswd(str,result,buffer,buflen);
-
-  // free and clear the local struct
-  free(mgr.buf);
-  return NSS_STATUS_SUCCESS;
+  res = parsepasswd(str,result,buffer,buflen);
+  if (res == 0) {
+    return NSS_STATUS_SUCCESS;
+  }
+  *errnop = res;
+  if (res == ERANGE) {
+    return NSS_STATUS_TRYAGAIN;
+  }
+  return NSS_STATUS_NOTFOUND;
 }
 
 static enum nss_status
 _nss_oslogin_getpwuid_r(uid_t uid, struct passwd *result, char *buffer,
                         size_t buflen, int *errnop) {
-  return NSS_STATUS_SUCCESS;
+  DEBUGF("entered getpwuid_r\n");
+  // create a local manager struct
+  // TODO: memset 0 this, or initialize fields
+  int res;
+  struct Buffer mgr;
+  mgr.rpos = 0;
+  mgr.buflen = 0;
+  mgr.buf = (char *)malloc(BUFSIZE);
+
+  *errnop = 0;
+
+  // dial the socket
+  if (dial(&mgr) != 0) {
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // send the verb GETPWUID with the argument <name>
+  // TODO: validate incoming length of 'name' fits in 100 char
+  char str[1000];
+  sprintf(str, "GETPWUID %d\n", uid);
+  if (send(mgr.socket, str, strlen(str), 0) == -1) {
+      DEBUGF("send\n");
+      return NSS_STATUS_NOTFOUND;
+  }
+
+  // read a line using the local struct
+  // TODO: stop using 'str' here
+  if ((readaline(&mgr, str, 1000)) < 0) {
+    DEBUGF("failed to read result\n");
+    free(mgr.buf);
+    return NSS_STATUS_NOTFOUND;
+  }
+  free(mgr.buf);
+
+  if (str[0] == '\n') {
+    DEBUGF("no results for uid\n");
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // parse into struct passwd result
+  res = parsepasswd(str,result,buffer,buflen);
+  if (res == 0) {
+    return NSS_STATUS_SUCCESS;
+  }
+  *errnop = res;
+  if (res == ERANGE) {
+    return NSS_STATUS_TRYAGAIN;
+  }
+  return NSS_STATUS_NOTFOUND;
 }
 
 // "rewind" for getpwent calls, here by dialing again
