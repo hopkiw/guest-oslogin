@@ -141,7 +141,7 @@ TEST(ParserTest, TestParsegroupEnoent) {
 }
 
 TEST(IntegTest, TestGetpwnam) {
-  int res;
+  int res, errnop;
   ssize_t buflen;
   struct passwd result;
   char *buf;
@@ -149,12 +149,12 @@ TEST(IntegTest, TestGetpwnam) {
   buflen = 32768;
   buf = (char *)malloc(buflen);
 
-  res = _nss_oslogin_getpwnam_r("liamh", &result, buf, buflen, &errno);
+  res = _nss_oslogin_getpwnam_r("liamh", &result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
 }
 
 TEST(IntegTest, TestGetpwuid) {
-  int res;
+  int res, errnop;
   ssize_t buflen;
   struct passwd result;
   char *buf;
@@ -162,36 +162,43 @@ TEST(IntegTest, TestGetpwuid) {
   buflen = 32768;
   buf = (char *)malloc(buflen);
 
-  res = _nss_oslogin_getpwuid_r(1000, &result, buf, buflen, &errno);
+  res = _nss_oslogin_getpwuid_r(1000, &result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
 }
 
 TEST(IntegTest, TestGetpwent) {
-  int res;
+  int res, errnop;
   ssize_t buflen;
   struct passwd result;
   char *buf;
 
   res = _nss_oslogin_setpwent(0);
-  ASSERT_EQ(res, 0);
+  ASSERT_EQ(res, NSS_STATUS_SUCCESS);
+
+  DEBUGF("setting up buffer\n");
 
   buflen = 32768;
   buf = (char *)malloc(buflen);
 
-  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errno);
+  DEBUGF("calling getpwent\n");
+  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
+  DEBUGF("checking getpwent result\n");
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
+  DEBUGF("checking passwd result\n");
   ASSERT_STREQ(result.pw_name, "1");
 
-  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errno);
+  DEBUGF("calling getpwent again\n");
+  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_STREQ(result.pw_name, "2");
 
+  DEBUGF("calling endpwent\n");
   res = _nss_oslogin_endpwent();
-  ASSERT_EQ(res, 0);
+  ASSERT_EQ(res, NSS_STATUS_SUCCESS);
 }
 
 TEST(IntegTest, TestGetpwentImplicitSetpwent) {
-  int res;
+  int res, errnop;
   ssize_t buflen;
   struct passwd result;
   char *buf;
@@ -199,11 +206,11 @@ TEST(IntegTest, TestGetpwentImplicitSetpwent) {
   buflen = 32768;
   buf = (char *)malloc(buflen);
 
-  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errno);
+  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_STREQ(result.pw_name, "1");
 
-  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errno);
+  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_STREQ(result.pw_name, "2");
 }
@@ -215,7 +222,7 @@ TEST(IntegTest, TestGetpwentReset) {
 }
 
 TEST(IntegTest, TestGetgrnam) {
-  int res;
+  int res, errnop;
   ssize_t buflen;
   struct group result;
   char *buf;
@@ -223,7 +230,7 @@ TEST(IntegTest, TestGetgrnam) {
   buflen = 32768;
   buf = (char *)malloc(buflen);
 
-  res = _nss_oslogin_getgrnam_r("liamh", &result, buf, buflen, &errno);
+  res = _nss_oslogin_getgrnam_r("liamh", &result, buf, buflen, &errnop);
   ASSERT_EQ(res, ERANGE);
 }
 
@@ -257,7 +264,7 @@ TEST(IntegTest, TestGetpwentErange) {
   buflen = 32768;
   buf = (char *)realloc(buf, buflen);
 
-  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errno);
+  res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_EQ(errnop, 0);
 }

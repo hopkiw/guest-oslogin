@@ -182,11 +182,13 @@ int parsegroup(char *str, struct group *result, char *buffer, size_t buflen) {
 }
 
 struct Buffer {
-  int socket; // the socket we read from
-  char *buf;  // the 1-KB buffer we read into
   int rpos;   // our current byte position in the buffer
   ssize_t buflen; // how much data we read into the buffer
+  int socket; // the socket we read from
+  char *buf;  // the 1-KB buffer we read into
 };
+
+struct Buffer gbuf;
 
 int dial(struct Buffer *buf) {
     if ((buf->socket = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
@@ -379,9 +381,50 @@ _nss_oslogin_getpwent_r(struct passwd *result, char *buffer, size_t buflen,
   // get a line using the *global* struct socket and buffer
   // parse it into result
   // release the lock
-  DEBUGF("result %p buffer %p buflen %zd errnop %p\n", result, buffer,
-         buflen, errnop);
-  return NSS_STATUS_SUCCESS;
+  DEBUGF("entered getpwent_r\n");
+  // create a local manager struct
+  // TODO: memset 0 this, or initialize fields
+  int res;
+  *errnop = 0;
+
+  // dial the socket
+  if ((gbuf.socket == 0) && (dial(&gbuf) != 0)) {
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // send the verb GETPWENT with no argument
+  // TODO: validate incoming length of 'name' fits in 100 char
+  char str[] = "GETPWENT\n";
+  if (send(gbuf.socket, str, strlen(str), 0) == -1) {
+      DEBUGF("send\n");
+      return NSS_STATUS_NOTFOUND;
+  }
+
+  // read a line using the local struct
+  // TODO: stop using 'str' here
+  char str2[1000];
+  if ((readaline(&gbuf, str2, 1000)) < 0) {
+    DEBUGF("failed to read result\n");
+    free(gbuf.buf);
+    return NSS_STATUS_NOTFOUND;
+  }
+  free(gbuf.buf);
+
+  if (str[0] == '\n') {
+    DEBUGF("no results for name\n");
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // parse into struct passwd result
+  res = parsepasswd(str,result,buffer,buflen);
+  if (res == 0) {
+    return NSS_STATUS_SUCCESS;
+  }
+  *errnop = res;
+  if (res == ERANGE) {
+    return NSS_STATUS_TRYAGAIN;
+  }
+  return NSS_STATUS_NOTFOUND;
 }
 
 static enum nss_status
