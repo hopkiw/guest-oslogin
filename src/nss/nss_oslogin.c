@@ -79,7 +79,7 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // when do we malloc for the string to be parsed? it should be the one that
 // grows as needed up to buflen.. so this is the highest level it could exist.
-// but readaline currently doesn't do that resizing, either it needs to or i
+// but recvline currently doesn't do that resizing, either it needs to or i
 // need to.
 // all the nss functions are going to need to create resizeable buffers
 
@@ -90,6 +90,7 @@ void getpwnam_r_locked() {
 }
 
 int parsepasswd(char *str, struct passwd *result, char *buffer, size_t buflen) {
+  DEBUGF("parsepasswd(%s)\n", str);
   int fields[PW_END+1] = {0};
 
   fields[PW_END] = strlen(str)+1;
@@ -191,26 +192,32 @@ struct Buffer {
 struct Buffer gbuf;
 
 int dial(struct Buffer *buf) {
-    if ((buf->socket = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-      DEBUGF("failed to create socket");
-      return -1;
-    }
-
-    int len;
-    struct sockaddr_un remote;
-    remote.sun_family = AF_UNIX;
-    strcpy(remote.sun_path, SOCK_PATH);
-    len = strlen(remote.sun_path) + sizeof(remote.sun_family);
-    if (connect(buf->socket, (struct sockaddr *)&remote, len) == -1) {
-        DEBUGF("failed to connect\n");
-        return -1;
-    }
-
+  if (buf->socket != 0) {
     return 0;
+  }
+  if ((buf->socket = socket(AF_UNIX, SOCK_STREAM|SOCK_NONBLOCK, 0)) == -1) {
+    DEBUGF("failed to create socket");
+    return -1;
+  }
+
+  int len;
+  struct sockaddr_un remote;
+  remote.sun_family = AF_UNIX;
+  strcpy(remote.sun_path, SOCK_PATH);
+  len = strlen(remote.sun_path) + sizeof(remote.sun_family);
+  if (connect(buf->socket, (struct sockaddr *)&remote, len) == -1) {
+      DEBUGF("failed to connect\n");
+      return -1;
+  }
+
+  return 0;
 }
 
-int readaline(struct Buffer *buffer, char *oneword, int buflen) {
-  int wpos = 0;
+int recvline(struct Buffer *buffer, char *oneword, int buflen) {
+  int rdy, wpos = 0;
+  fd_set fds;
+  struct timeval tmout = {2,0};
+
   while(1) {
     for (; buffer->rpos < buffer->buflen; buffer->rpos++) {
       if (wpos >= buflen) {
@@ -223,21 +230,26 @@ int readaline(struct Buffer *buffer, char *oneword, int buflen) {
       if (buffer->buf[buffer->rpos] == '\n') {
         oneword[wpos++] = '\0';
         buffer->rpos++;
+        DEBUGF("got end of line at rpos %d out of %ld\n", buffer->rpos, buffer->buflen);
         return wpos;
       }
     }
+    DEBUGF("rpos was %d, resetting\n", buffer->rpos);
     buffer->rpos = 0;
-    if (buffer->buflen > 0 && buffer->buflen < BUFSIZE) {
-      // this was the last bit of data in the recv queue, don't recv anymore.
-      // Since we didn't return above, it must not have ended on a newline.
-      //
-      // TODO: what about when we have the last bit of data but buflen does
-      // equal BUFSIZE ? Any chance of a hanging recv() ?
-      DEBUGF("buffer->buflen < BUFSIZE\n");
+
+    FD_ZERO(&fds);
+    FD_SET(buffer->socket, &fds);
+    rdy = select(buffer->socket+1, &fds, NULL, NULL, &tmout);
+    if (rdy <= 0 || !(FD_ISSET(buffer->socket, &fds))) {
+      DEBUGF("select\n");
       return -1;
     }
-    if ((buffer->buflen = recv(buffer->socket, buffer->buf, BUFSIZE, 0)) < 0) {
-      DEBUGF("recv");
+    DEBUGF("going to recv..\n");
+    if ((buffer->buflen = recv(buffer->socket, buffer->buf, BUFSIZE, 0)) <= 0) {
+      DEBUGF("error during recv, got %ld\n", buffer->buflen);
+      if (buffer->buflen == -1) {
+        perror("perror says: ");
+      }
       return -1;
     }
   }
@@ -273,7 +285,7 @@ _nss_oslogin_getpwnam_r(const char *name, struct passwd *result, char *buffer,
 
   // read a line using the local struct
   // TODO: stop using 'str' here
-  if ((readaline(&mgr, str, 1000)) < 0) {
+  if ((recvline(&mgr, str, 1000)) < 0) {
     DEBUGF("failed to read result\n");
     free(mgr.buf);
     return NSS_STATUS_NOTFOUND;
@@ -325,9 +337,10 @@ _nss_oslogin_getpwuid_r(uid_t uid, struct passwd *result, char *buffer,
       return NSS_STATUS_NOTFOUND;
   }
 
+
   // read a line using the local struct
   // TODO: stop using 'str' here
-  if ((readaline(&mgr, str, 1000)) < 0) {
+  if ((recvline(&mgr, str, 1000)) < 0) {
     DEBUGF("failed to read result\n");
     free(mgr.buf);
     return NSS_STATUS_NOTFOUND;
@@ -368,6 +381,14 @@ static enum nss_status _nss_oslogin_endpwent(void) {
   // get the lock
   // if needed (the socket in the struct is not NULL), close it.
   // release the lock
+  if (gbuf.socket != 0) {
+    close(gbuf.socket);
+    gbuf.socket = 0;
+  }
+  if (gbuf.buf != NULL) {
+    free(gbuf.buf);
+    gbuf.buf = NULL;
+  }
   return NSS_STATUS_SUCCESS;
 }
 
@@ -388,8 +409,11 @@ _nss_oslogin_getpwent_r(struct passwd *result, char *buffer, size_t buflen,
   *errnop = 0;
 
   // dial the socket
-  if ((gbuf.socket == 0) && (dial(&gbuf) != 0)) {
-    return NSS_STATUS_NOTFOUND;
+  if (gbuf.buf == NULL) {
+    gbuf.buf = (char *)malloc(BUFSIZE);
+    if (gbuf.buf == NULL || dial(&gbuf) != 0) {
+      return NSS_STATUS_NOTFOUND;
+    }
   }
 
   // send the verb GETPWENT with no argument
@@ -400,15 +424,13 @@ _nss_oslogin_getpwent_r(struct passwd *result, char *buffer, size_t buflen,
       return NSS_STATUS_NOTFOUND;
   }
 
-  // read a line using the local struct
+  // read a line using the global struct
   // TODO: stop using 'str' here
   char str2[1000];
-  if ((readaline(&gbuf, str2, 1000)) < 0) {
+  if ((recvline(&gbuf, str2, 1000)) < 0) {
     DEBUGF("failed to read result\n");
-    free(gbuf.buf);
     return NSS_STATUS_NOTFOUND;
   }
-  free(gbuf.buf);
 
   if (str[0] == '\n') {
     DEBUGF("no results for name\n");
@@ -416,7 +438,64 @@ _nss_oslogin_getpwent_r(struct passwd *result, char *buffer, size_t buflen,
   }
 
   // parse into struct passwd result
-  res = parsepasswd(str,result,buffer,buflen);
+  res = parsepasswd(str2,result,buffer,buflen);
+  if (res == 0) {
+    return NSS_STATUS_SUCCESS;
+  }
+  *errnop = res;
+  if (res == ERANGE) {
+    DEBUGF("returning ERANGE\n");
+    return NSS_STATUS_TRYAGAIN;
+  }
+  _nss_oslogin_endpwent();
+  DEBUGF("returning error\n");
+  return NSS_STATUS_NOTFOUND;
+}
+
+static enum nss_status
+_nss_oslogin_getgrnam_r(const char *name, struct group *result, char *buffer,
+                        size_t buflen, int *errnop) {
+  DEBUGF("entered getgrnam_r\n");
+  // create a local manager struct
+  // TODO: memset 0 this, or initialize fields
+  int res;
+  struct Buffer mgr;
+  mgr.rpos = 0;
+  mgr.buflen = 0;
+  mgr.buf = (char *)malloc(BUFSIZE);
+
+  *errnop = 0;
+
+  // dial the socket
+  if (dial(&mgr) != 0) {
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // send the verb GETPWNAM with the argument <name>
+  // TODO: validate incoming length of 'name' fits in 100 char
+  char str[1000];
+  sprintf(str, "GETGRNAM %s\n", name);
+  if (send(mgr.socket, str, strlen(str), 0) == -1) {
+      DEBUGF("send\n");
+      return NSS_STATUS_NOTFOUND;
+  }
+
+  // read a line using the local struct
+  // TODO: stop using 'str' here
+  if ((recvline(&mgr, str, 1000)) < 0) {
+    DEBUGF("failed to read result\n");
+    free(mgr.buf);
+    return NSS_STATUS_NOTFOUND;
+  }
+  free(mgr.buf);
+
+  if (str[0] == '\n') {
+    DEBUGF("no results for name\n");
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // parse into struct passwd result
+  res = parsegroup(str,result,buffer,buflen);
   if (res == 0) {
     return NSS_STATUS_SUCCESS;
   }
@@ -428,15 +507,57 @@ _nss_oslogin_getpwent_r(struct passwd *result, char *buffer, size_t buflen,
 }
 
 static enum nss_status
-_nss_oslogin_getgrnam_r(const char *name, struct group *result, char *buffer,
-                        size_t buflen, int *errnop) {
-  return NSS_STATUS_SUCCESS;
-}
-
-static enum nss_status
 _nss_oslogin_getgrgid_r(gid_t gid, struct group *result, char *buffer,
                         size_t buflen, int *errnop) {
-  return NSS_STATUS_SUCCESS;
+  DEBUGF("entered getgrgid_r\n");
+  // create a local manager struct
+  // TODO: memset 0 this, or initialize fields
+  int res;
+  struct Buffer mgr;
+  mgr.rpos = 0;
+  mgr.buflen = 0;
+  mgr.buf = (char *)malloc(BUFSIZE);
+
+  *errnop = 0;
+
+  // dial the socket
+  if (dial(&mgr) != 0) {
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // send the verb GETPWNAM with the argument <name>
+  // TODO: validate incoming length of 'name' fits in 100 char
+  char str[1000];
+  sprintf(str, "GETGRGID %d\n", gid);
+  if (send(mgr.socket, str, strlen(str), 0) == -1) {
+      DEBUGF("send\n");
+      return NSS_STATUS_NOTFOUND;
+  }
+
+  // read a line using the local struct
+  // TODO: stop using 'str' here
+  if ((recvline(&mgr, str, 1000)) < 0) {
+    DEBUGF("failed to read result\n");
+    free(mgr.buf);
+    return NSS_STATUS_NOTFOUND;
+  }
+  free(mgr.buf);
+
+  if (str[0] == '\n') {
+    DEBUGF("no results for name\n");
+    return NSS_STATUS_NOTFOUND;
+  }
+
+  // parse into struct passwd result
+  res = parsegroup(str,result,buffer,buflen);
+  if (res == 0) {
+    return NSS_STATUS_SUCCESS;
+  }
+  *errnop = res;
+  if (res == ERANGE) {
+    return NSS_STATUS_TRYAGAIN;
+  }
+  return NSS_STATUS_NOTFOUND;
 }
 
 static enum nss_status _nss_oslogin_setgrent(int stayopen) {
