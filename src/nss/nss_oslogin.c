@@ -74,7 +74,7 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // TODO: strip \n from end of strings, don't create member names with \n in them
 // TODO: switch from \n to \0
-// TODO: readline must do dynamic buffer (re-)allocation up to max as above
+// TODO: recvline must do dynamic buffer (re-)allocation up to max as above
 // DONE: macro and function out the parsing routines
 
 // when do we malloc for the string to be parsed? it should be the one that
