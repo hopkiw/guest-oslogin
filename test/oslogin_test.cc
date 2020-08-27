@@ -216,6 +216,8 @@ TEST(IntegTest, TestGetpwentImplicitSetpwent) {
   res = _nss_oslogin_getpwent_r(&result, buf, buflen, &errnop);
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_STREQ(result.pw_name, "user2");
+
+  ASSERT_EQ(_nss_oslogin_endpwent(), NSS_STATUS_SUCCESS);
 }
 
 TEST(IntegTest, TestGetpwentReset) {
@@ -278,6 +280,35 @@ TEST(IntegTest, TestGetpwentErange) {
   ASSERT_EQ(res, NSS_STATUS_SUCCESS);
   ASSERT_EQ(errnop, 0);
   ASSERT_STREQ(result.pw_name, "user2");
+
+  ASSERT_EQ(_nss_oslogin_endpwent(), NSS_STATUS_SUCCESS);
+}
+
+TEST(IntegTest, TestGetgrentErange) {
+  int res, errnop;
+  ssize_t buflen;
+  struct group result;
+  char *buf;
+
+  buflen = 32768;
+  buf = (char *)malloc(buflen);
+
+  res = _nss_oslogin_getgrent_r(&result, buf, buflen, &errnop);
+  ASSERT_EQ(res, NSS_STATUS_SUCCESS);
+  ASSERT_EQ(errnop, 0);
+  ASSERT_STREQ(result.gr_name, "group1");
+
+  res = _nss_oslogin_getgrent_r(&result, buf, 12, &errnop);
+  ASSERT_EQ(res, NSS_STATUS_TRYAGAIN);
+  ASSERT_EQ(errnop, ERANGE);
+
+  errnop = 0;
+  res = _nss_oslogin_getgrent_r(&result, buf, buflen, &errnop);
+  ASSERT_EQ(res, NSS_STATUS_SUCCESS);
+  ASSERT_EQ(errnop, 0);
+  ASSERT_STREQ(result.gr_name, "group2");
+
+  ASSERT_EQ(_nss_oslogin_endpwent(), NSS_STATUS_SUCCESS);
 }
 
 int main(int argc, char** argv) {
